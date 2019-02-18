@@ -14,8 +14,6 @@ func init() {
 // Set is a set of addresses
 type Set map[Address]struct{}
 
-const Length = 22
-
 var addrSetEntry = atlas.BuildEntry(Set{}).Transform().
 	TransformMarshal(atlas.MakeMarshalTransformFunc(
 		func(s Set) ([]byte, error) {
@@ -26,7 +24,7 @@ var addrSetEntry = atlas.BuildEntry(Set{}).Transform().
 
 			sort.Strings(out)
 
-			bytes := make([]byte, 0, len(out)*Length)
+			bytes := make([]byte, 0, len(out)*LengthActor)
 			for _, k := range out {
 				bytes = append(bytes, []byte(k)...)
 			}
@@ -35,12 +33,16 @@ var addrSetEntry = atlas.BuildEntry(Set{}).Transform().
 	TransformUnmarshal(atlas.MakeUnmarshalTransformFunc(
 		func(vals []byte) (Set, error) {
 			out := make(Set)
-			for i := 0; i < len(vals); i += Length {
-				end := i + Length
+			for i := 0; i < len(vals); i += LengthActor {
+				end := i + LengthActor
 				if end > len(vals) {
 					end = len(vals)
 				}
-				out[Address(vals[i:end])] = struct{}{}
+				s, err := NewFromBytes(vals[i:end])
+				if err != nil {
+					return nil, err
+				}
+				out[s] = struct{}{}
 			}
 			return out, nil
 		})).

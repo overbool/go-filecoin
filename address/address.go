@@ -4,168 +4,221 @@ import (
 	"bytes"
 	"crypto/ecdsa"
 	"crypto/sha256"
+	"encoding/base32"
 	"encoding/binary"
-
-	"github.com/btcsuite/btcutil/base58"
 
 	"github.com/filecoin-project/go-filecoin/bls-signatures"
 	"github.com/filecoin-project/go-filecoin/crypto"
 )
 
+// New returns an address for network `n`, for protocol `p`, containing value `data`.
+func New(n Network, p Protocol, data []byte) (Address, error) {
+	// check for valid inputs
+	if n != Mainnet && n != Testnet {
+		return Undef, ErrUnknownNetwork
+	}
+	if p != SECP256K1 && p != ID && p != Actor && p != BLS {
+		return Undef, ErrUnknownProtocol
+
+	}
+	datalen := len(data)
+	// two 8 bytes (max) numbers plus data
+	buf := make([]byte, 2*binary.MaxVarintLen64+datalen)
+	c := binary.PutUvarint(buf, n)
+	c += binary.PutUvarint(buf[c:], p)
+	cn := copy(buf[c:], data)
+	if cn != datalen {
+		panic("copy data length is inconsistent")
+	}
+
+	newAddr := Address{string(buf[:c+datalen])}
+	return newAddr, nil
+}
+
 // Address is the go type that represents an address in the filecoin network.
-type Address string
+type Address struct{ str string }
+
+var Undef = Address{}
 
 // Network represents which network the address belongs to.
 func (a Address) Network() Network {
-	return a[0]
+	network, _ := uvarint(a.str)
+	return network
 }
 
-// Type represents the type of content contained in the address.
-func (a Address) Type() Type {
-	return a[1]
+// Protocol represents the type of content contained in the address.
+func (a Address) Protocol() Protocol {
+	_, c := uvarint(a.str)
+	protocol, _ := uvarint(a.str[c:])
+	return protocol
 }
 
 // Data represents the content contained in the address.
 func (a Address) Data() []byte {
-	return []byte(a[2:])
+	_, c := uvarint(a.str)
+	_, cn := uvarint(a.str)
+	return []byte(a.str[c+cn:])
 }
 
 // Empty returns true if the address is empty.
 func (a Address) Empty() bool {
-	return 0 == len(a)
+	return 0 == len(a.str)
 }
 
 // Bytes returns the byte representation of the address.
 func (a Address) Bytes() []byte {
-	return []byte(a)
+	return []byte(a.str)
 }
 
-// String returns the string representation of an address, or `<invalid address>` on a best effort basis if `a` is invalid.
 func (a Address) String() string {
-	// I am aware this is going to get ripped to shit in CR.... :')
-	// This is '5' so the checksum call below doesn't panic
-	if len(a) < 5 {
+	return a.encode()
+}
+
+// Encode returns the string representation of an Address, or `<invalid address>` on a best effort basis if `a` is invalid.
+func (a Address) encode() string {
+	if len(a.str) < 3 {
 		return "<invalid address>"
 	}
 
 	var prefix string
 	switch a.Network() {
 	case Mainnet:
-		prefix = "fc"
+		prefix = MainnetStr
 		break
 	case Testnet:
-		prefix = "tf"
+		prefix = TestnetStr
 		break
 	default:
 		return "<invalid address>"
 	}
 
-	// ID's do not have a checksum, bail
-	if a.Type() == ID {
-		return prefix + base58.Encode(a.suffix())
+	// ID's do not have a checksum
+	if a.Protocol() == ID {
+		return prefix + base32.StdEncoding.EncodeToString(a.suffix())
 	}
 
-	return prefix + base58.Encode(append(a.suffix(), checksum(a.suffix())...))
+	return prefix + base32.StdEncoding.EncodeToString(append(a.suffix(), checksum(a.suffix())...))
 }
 
 // decodeFromString is a helper method that attempts to extract the components from an address `addr`.
-func decodeFromString(addr string) (string, Type, []byte, []byte, error) {
-	//     | network  |  type  |     data     | checksum |
-	//     | 1 byte   | 1 byte |  8-48 bytes  |  4 bytes |
-	// base58Encoded [                                    ]
-	// Not included for type: ID            [             ]
-	// min length of an address: 11
-	if len(addr) < 11 {
-		return "", 0, []byte{}, []byte{}, ErrInvalidBytes
+func decodeFromString(addr string) (string, Protocol, []byte, []byte, error) {
+	if len(addr) < 4 {
+		return "", 0, []byte{}, []byte{}, ErrInvalidLength
 	}
-	cksmShft := 4
 
 	var ntwrk string
 	switch addr[:2] {
-	case "fc":
-		ntwrk = "fc"
+	case MainnetStr:
+		ntwrk = MainnetStr
 		break
-	case "tf":
-		ntwrk = "tf"
+	case TestnetStr:
+		ntwrk = TestnetStr
 		break
 	default:
-		return "", 0, []byte{}, []byte{}, ErrInvalidBytes
+		return "", 0, []byte{}, []byte{}, ErrUnknownNetwork
 	}
 
-	addrRaw := base58.Decode(addr[2:])
-	// type is the first byte
-	typ := addrRaw[0]
-	// ID's do not have a checksum so adjust the shift bit
-	if typ == ID {
-		cksmShft = 0
+	// Decode the `Protocol` and associated `data`
+	raw, err := base32.StdEncoding.DecodeString(addr[2:])
+	if err != nil {
+		return "", 0, []byte{}, []byte{}, err
 	}
-	// data is everything after the type up to the last 4 bytes
-	data := addrRaw[1 : len(addrRaw)-cksmShft]
-	// checksum is the last 4 bytes
-	cksm := addrRaw[len(addrRaw)-cksmShft : len(addrRaw)]
+	// `Protocol` is before data and is uvarin encoded
+	protocol, protolen := binary.Uvarint(raw)
 
-	return ntwrk, typ, data, cksm, nil
+	// if the `Protocol` is an ID there is no checksum after data
+	cksmOffset := CksmLength
+	if protocol == ID {
+		cksmOffset = 0
+	}
+
+	// data is everything after protocol up to the last CksmLength bytes
+	data := raw[protolen : len(raw)-cksmOffset]
+	// checksum is the last CksmLength bytes
+	cksm := raw[len(raw)-cksmOffset : len(raw)]
+
+	return ntwrk, protocol, data, cksm, nil
 }
 
 // NewFromString tries to parse a given string into a filecoin address.
 func NewFromString(addr string) (Address, error) {
 	// decode the address into is components
-	ntwrk, typ, data, cksm, err := decodeFromString(addr)
+	ntwrk, proto, data, cksm, err := decodeFromString(addr)
 	if err != nil {
-		return "", err
+		return Undef, err
 	}
 
 	// does the address belong to a known network
-	var in []byte
+	var network Network
 	switch ntwrk {
-	case "fc":
-		in = append(in, Mainnet)
-	case "tf":
-		in = append(in, Testnet)
+	case MainnetStr:
+		network = Mainnet
+	case TestnetStr:
+		network = Testnet
 	default:
-		return "", ErrUnknownNetwork
+		return Undef, ErrUnknownNetwork
 	}
 
+	networkBuf := make([]byte, binary.MaxVarintLen64)
+	cn := binary.PutUvarint(networkBuf, network)
+	networkBuf = networkBuf[:cn]
+
+	protoBuf := make([]byte, binary.MaxVarintLen64)
+	cp := binary.PutUvarint(protoBuf, proto)
+	protoBuf = protoBuf[:cp]
+
 	// the checksum digest is produced from the address type and data, so grab that here.
-	cksmIngest := append([]byte{typ}, data...)
-	switch typ {
+	cksmIngest := append(protoBuf, data...)
+	switch proto {
 	case SECP256K1:
-		if len(data) != LEN_SECP256K1 {
-			return "", ErrInvalidBytes
+		if len(data) != LengthSecp256k1 {
+			return Undef, ErrInvalidBytes
 		}
 		if !verifyChecksum(cksmIngest, cksm) {
-			return "", ErrInvalidChecksum
+			return Undef, ErrInvalidChecksum
 		}
 		break
 	case ID:
-		if len(data) != LEN_ID {
-			return "", ErrInvalidBytes
+		if len(data) < 1 {
+			return Undef, ErrInvalidBytes
 		}
 		// ID's do not have a checksum
 		break
 	case Actor:
-		if len(data) != LEN_Actor {
-			return "", ErrInvalidBytes
+		if len(data) != LengthActor {
+			return Undef, ErrInvalidBytes
 		}
 		if !verifyChecksum(cksmIngest, cksm) {
-			return "", ErrInvalidChecksum
+			return Undef, ErrInvalidChecksum
 		}
 		break
 	case BLS:
-		if len(data) != LEN_BLS {
-			return "", ErrInvalidBytes
+		if len(data) != LengthBLS {
+			return Undef, ErrInvalidBytes
 		}
 		if !verifyChecksum(cksmIngest, cksm) {
-			return "", ErrInvalidChecksum
+			return Undef, ErrInvalidChecksum
 		}
 		break
 	default:
-		return "", ErrUnknownType
+		return Undef, ErrUnknownProtocol
 	}
 
-	// checksum and data length validates, we have a winner!
-	in = append(in, typ)
-	return Address(append(in, data...)), nil
+	var raw []byte
+	// add the network bytes
+	raw = append(raw, networkBuf...)
+	// add the protocol bytes
+	raw = append(raw, protoBuf...)
+	// add the data
+	raw = append(raw, data...)
+	return Address{string(raw)}, nil
+}
+
+func NewFromBytes(raw []byte) (Address, error) {
+	network, c1 := binary.Uvarint(raw)
+	protocol, c2 := binary.Uvarint(raw[c1:])
+	data := raw[c1+c2:]
+	return New(network, protocol, data)
 }
 
 // NewFromSECP256K1 returns an address for the actor represented by secp256k1 public key `pk`.
@@ -185,9 +238,10 @@ func NewFromBLS(n Network, pk bls.PublicKey) (Address, error) {
 
 // NewFromActorID returns an address for the actor represented by `id`.
 func NewFromActorID(n Network, id uint64) (Address, error) {
-	data := make([]byte, 8, 8)
-	binary.BigEndian.PutUint64(data, id)
-	return New(n, ID, data)
+	buf := make([]byte, binary.MaxVarintLen64)
+	c := binary.PutUvarint(buf, id)
+	buf = buf[:c]
+	return New(n, ID, buf)
 }
 
 // NewFromActor returns an address created for the actor represented by `data`.
@@ -195,44 +249,35 @@ func NewFromActor(n Network, data []byte) (Address, error) {
 	return New(n, Actor, Hash(data))
 }
 
-// New returns an address for network `n`, of type `t`, containing value `data`.
-func New(n Network, t Type, data []byte) (Address, error) {
-	var out []byte
-	if n != Mainnet && n != Testnet {
-		return "", ErrUnknownNetwork
-	}
-	if t != SECP256K1 && t != ID && t != Actor && t != BLS {
-		return "", ErrUnknownType
-	}
-	out = append([]byte{n, t}, data...)
-	return Address(out), nil
-}
-
 // NetworkToString creates a human readable representation of the network.
 func NetworkToString(n Network) string {
 	switch n {
 	case Mainnet:
-		return "fc"
+		return MainnetStr
 	case Testnet:
-		return "tf"
+		return TestnetStr
 	default:
 		panic("invalid network")
 	}
 }
 
-// checksum returns the last 4 bytes of sha256 data
+// checksum returns the last CksmLength bytes of double sha256 data.
 func checksum(data []byte) []byte {
 	cksm := sha256.Sum256(data)
-	return cksm[len(cksm)-4:]
+	cksm = sha256.Sum256(cksm[:])
+	return cksm[len(cksm)-CksmLength:]
 }
 
 // verify checksum returns true if checksum(data) matches cksm
 func verifyChecksum(data, cksm []byte) bool {
 	maybeCksm := sha256.Sum256(data)
-	return (0 == bytes.Compare(maybeCksm[len(maybeCksm)-4:], cksm))
+	maybeCksm = sha256.Sum256(maybeCksm[:])
+	return (0 == bytes.Compare(maybeCksm[len(maybeCksm)-CksmLength:], cksm))
 }
 
-// Address sufix is everything encoded on an address. All but the first byte.
+// Address sufix is everything encoded on an address -- the protocol and its data.
 func (a Address) suffix() []byte {
-	return []byte(a[1:])
+	// since the Network isn't encoded, take all but that
+	_, n := uvarint(a.str)
+	return []byte(a.str[n:])
 }

@@ -6,8 +6,11 @@ import (
 	"github.com/filecoin-project/go-filecoin/bls-signatures"
 )
 
+// CksmLength is the length of checksum used by Address.
+const CksmLength = 6
+
 // Network represents which network an address belongs to.
-type Network = byte
+type Network = uint64
 
 const (
 	// Mainnet is the main network.
@@ -16,12 +19,19 @@ const (
 	Testnet
 )
 
-// Type represents the type of data address data holds
-type Type = byte
+var (
+	// MainnetStr is the string representation of Mainnet.
+	MainnetStr = "FC"
+	// TestnetStr is the string representation of Testnet.
+	TestnetStr = "TF"
+)
+
+// Protocol represents the type of data address data holds
+type Protocol = uint64
 
 const (
 	// SECP256K1 means the address is the hash of a secp256k1 public key
-	SECP256K1 Type = iota
+	SECP256K1 Protocol = iota
 	// ID means the address is an actor ID
 	ID
 	// Actor means the address is an acotr address, which is a fixed address
@@ -31,25 +41,26 @@ const (
 )
 
 const (
-	// length of address data containing a hash of Secp256k1 public key
-	LEN_SECP256K1 = SecpHashLength
-	// length of address data containing a hash of actor address //TODO better def
-	LEN_Actor = SecpHashLength
-	// length of address data containing an actor ID
-	LEN_ID = 8
-	// length of address data containing a BLS public key
-	LEN_BLS = bls.PublicKeyBytes
+	// length of address data containing a hash of Secp256k1 public key.
+	LengthSecp256k1 = SecpHashLength
+	// length of address data containing a hash of actor address.
+	LengthActor = SecpHashLength
+	// length of address data containing a BLS public key.
+	LengthBLS = bls.PublicKeyBytes
 )
 
 var (
 	// ErrUnknownNetwork is returned when encountering an unknown network in an address.
 	ErrUnknownNetwork = errors.New("unknown network")
-	// ErrUnknownType is returned when encountering an unknown address type.
-	ErrUnknownType = errors.New("unknown type")
+	// ErrUnknownProtocol is returned when encountering an unknown address type.
+	ErrUnknownProtocol = errors.New("unknown protocol")
+
 	// ErrInvalidBytes is returned when encountering an invalid byte format.
 	ErrInvalidBytes = errors.New("invalid bytes")
 	// ErrInvalidChecksum is returned when encountering an invalid checksum.
 	ErrInvalidChecksum = errors.New("invalid checksum")
+	// ErrInvalidLength is returned when encountering an invalid length address.
+	ErrInvalidLength = errors.New("invalid length")
 )
 
 var (
@@ -68,6 +79,7 @@ var (
 	PaymentBrokerAddress Address
 )
 
+/*
 func init() {
 	var err error
 	t := Hash([]byte("satoshi"))
@@ -102,3 +114,4 @@ func init() {
 		panic(err)
 	}
 }
+*/

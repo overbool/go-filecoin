@@ -1,5 +1,7 @@
 package address
 
+// TODO(frrist): this relies on addresses all being the same length, since that is
+// no longer the case we need some re-working"
 /*
 import (
 	"testing"
@@ -11,7 +13,7 @@ import (
 
 func TestSetRoundtrip(t *testing.T) {
 	assert := assert.New(t)
-	addrGetter := NewForTestGetter()
+	addrGetter := newActorForTestGetter()
 
 	addrs := make([]Address, 10)
 	for i := range addrs {
@@ -36,5 +38,4 @@ func TestSetRoundtrip(t *testing.T) {
 		assert.True(ok)
 	}
 }
-
 */

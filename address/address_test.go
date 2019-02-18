@@ -2,10 +2,7 @@ package address
 
 import (
 	"crypto/ecdsa"
-	"fmt"
 	"testing"
-
-	logging "gx/ipfs/QmcuXC5cxs79ro2cUuHs4HQ2bkDLJUYokwL8aivcX6HW3C/go-log"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -14,21 +11,16 @@ import (
 	"github.com/filecoin-project/go-filecoin/crypto"
 )
 
-var hashes = make([][]byte, 5)
-
-func init() {
-	for i := range hashes {
-		hashes[i] = Hash([]byte(fmt.Sprintf("foo-%d", i)))
-	}
-	logging.SetDebugLogging()
-}
-
 func TestEmptyAddress(t *testing.T) {
 	assert := assert.New(t)
+
 	var emptyAddr Address
 	assert.True(emptyAddr.Empty())
-	stuffAddr := Address("stuff")
+	assert.Equal(Undef, emptyAddr)
+
+	stuffAddr := Address{"stuff"}
 	assert.False(stuffAddr.Empty())
+	assert.NotEqual(Undef, stuffAddr)
 }
 
 func TestNewAddress(t *testing.T) {
@@ -44,25 +36,30 @@ func TestNewAddress(t *testing.T) {
 
 		secp256k1Addr, err := NewFromSECP256K1(Testnet, pk)
 		assert.NoError(err)
-		fmt.Println(secp256k1Addr)
+		assert.Equal(Testnet, secp256k1Addr.Network())
+		assert.Equal(SECP256K1, secp256k1Addr.Protocol())
 	})
 
 	t.Run("New ID Address", func(t *testing.T) {
 		idAddress, err := NewFromActorID(Testnet, uint64(1))
 		assert.NoError(err)
-		fmt.Println(idAddress)
+		assert.Equal(Testnet, idAddress.Network())
+		assert.Equal(ID, idAddress.Protocol())
+
 	})
 
 	t.Run("New Actor Address", func(t *testing.T) {
 		actorAddress, err := NewFromActor(Testnet, []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
 		assert.NoError(err)
-		fmt.Println(actorAddress)
+		assert.Equal(Testnet, actorAddress.Network())
+		assert.Equal(Actor, actorAddress.Protocol())
 	})
 
 	t.Run("New BLS Address", func(t *testing.T) {
 		blsAddress, err := NewFromBLS(Testnet, bls.PrivateKeyPublicKey((bls.PrivateKeyGenerate())))
 		assert.NoError(err)
-		fmt.Println(blsAddress)
+		assert.Equal(Testnet, blsAddress.Network())
+		assert.Equal(BLS, blsAddress.Protocol())
 	})
 
 }
@@ -111,14 +108,17 @@ func TestAddressDecodeEncode(t *testing.T) {
 	})
 
 	t.Run("Encode Decode BLS Address", func(t *testing.T) {
-		blsAddress, err := NewFromBLS(Testnet, bls.PrivateKeyPublicKey((bls.PrivateKeyGenerate())))
+		blsPk := bls.PrivateKeyPublicKey((bls.PrivateKeyGenerate()))
+		blsAddress, err := NewFromBLS(Testnet, blsPk)
 		assert.NoError(err)
-		fmt.Println(blsAddress)
 
 		addrString := blsAddress.String()
 
 		addrFromString, err := NewFromString(addrString)
 		assert.NoError(err)
 		assert.Equal(blsAddress.Bytes(), addrFromString.Bytes())
+
+		// is the pubkey there valid?
+		assert.Equal(blsAddress.Data(), blsPk[:])
 	})
 }
